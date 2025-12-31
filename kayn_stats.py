@@ -2,6 +2,19 @@ from dotenv import load_dotenv
 import os
 import requests
 import time
+import json
+
+CACHE_FILE = "cache.json"
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_cache(cache):
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f, indent=2)
 
 load_dotenv()
 
@@ -47,12 +60,12 @@ def get_ranked_match_ids(puuid, match_region, max_matches=1000):
 
 
 def analyze_matches(match_ids, puuid, match_region, target_kayn_games=None):
-    blue_games = blue_wins = 0
-    red_games = red_wins = 0
+    """
+    Returns a dictionary: match_id -> {"blue":0, "blue_wins":0, "red":0, "red_wins":0}
+    """
+    match_stats = {}
     kayn_games_found = 0
-
     headers = {"X-Riot-Token": API_KEY}
-
     from tqdm import tqdm
 
     for match_id in tqdm(match_ids, desc="Analyzing matches"):
@@ -68,6 +81,8 @@ def analyze_matches(match_ids, puuid, match_region, target_kayn_games=None):
             match = r.json()
             break
 
+        stats = {"blue": 0, "blue_wins": 0, "red": 0, "red_wins": 0}
+
         for p in match["info"]["participants"]:
             if p["puuid"] == puuid and p["championName"] == "Kayn":
                 kayn_games_found += 1
@@ -75,33 +90,35 @@ def analyze_matches(match_ids, puuid, match_region, target_kayn_games=None):
                 win = p["win"]
 
                 if primary_rune == 8000:
-                    # Precision -> Red kayn (Rhaast)
-                    red_games += 1
+                    stats["red"] += 1
                     if win:
-                        red_wins += 1
+                        stats["red_wins"] += 1
                 elif primary_rune in (8100, 8300):
-                    #Domination or Inspiration -> Blue kayn (Shadow Assassin)
-                    blue_games += 1
+                    stats["blue"] += 1
                     if win:
-                        blue_wins += 1
+                        stats["blue_wins"] += 1
                 else:
-                    # All others fallback to blue kayn
-                    blue_games += 1
+                    stats["blue"] += 1
                     if win:
-                        blue_wins += 1
+                        stats["blue_wins"] += 1
 
                 if VERBOSE:
                     tqdm.write(f"Kayn games found: {kayn_games_found}")
 
                 if target_kayn_games and kayn_games_found >= target_kayn_games:
-                    return blue_games, blue_wins, red_games, red_wins
+                    match_stats[match_id] = stats
+                    return match_stats
+
+        if stats["blue"] + stats["red"] > 0:
+            match_stats[match_id] = stats
 
         time.sleep(1.3)
 
     if VERBOSE:
         tqdm.write(f"Finished analyzing matches. Total Kayn games found: {kayn_games_found}")
 
-    return blue_games, blue_wins, red_games, red_wins
+    return match_stats
+
 
 import argparse
 
@@ -150,12 +167,31 @@ def main():
     puuid = get_puuid(match_region)
     match_ids = get_ranked_match_ids(puuid, match_region, max_matches=MAX_MATCHES)
 
-    blue_g, blue_w, red_g, red_w = analyze_matches(
-        match_ids, 
-        puuid,
-        match_region,
-        target_kayn_games=TARGET_KAYN_GAMES
-    )
+    # Load cache
+    cache = load_cache()
+    puuid_cache = cache.get(puuid, {})
+
+    # Only fetch matches not already cached
+    match_ids_to_fetch = [m for m in match_ids if m not in puuid_cache]
+
+    if match_ids_to_fetch:
+        new_stats = analyze_matches(
+            match_ids_to_fetch,
+            puuid,
+            match_region,
+            target_kayn_games=TARGET_KAYN_GAMES
+        )
+        puuid_cache.update(new_stats)
+        cache[puuid] = puuid_cache
+        save_cache(cache)
+        if VERBOSE:
+            print("\nCached new match data to cache.json")
+
+    # Sum all cached stats for this puuid
+    blue_g = sum(v["blue"] for v in puuid_cache.values())
+    blue_w = sum(v["blue_wins"] for v in puuid_cache.values())
+    red_g = sum(v["red"] for v in puuid_cache.values())
+    red_w = sum(v["red_wins"] for v in puuid_cache.values())
 
     total = blue_g + red_g
 
@@ -171,7 +207,7 @@ def main():
         print(f"\nRed Kayn:")
         print(f" Games: {red_g} ({red_g/total:.1%} pickrate)")
         print(f" Winrate: {red_w/red_g:.1%}")
-    
+
     total_kayn_games = blue_g + red_g
     total_kayn_wins = blue_w + red_w
 
@@ -193,6 +229,7 @@ def main():
             writer.writerow(["Total", total_kayn_games, "100%", f"{total_kayn_wins/total_kayn_games:.1%}"])
         if VERBOSE:
             print("\nKayn stats exported to kayn_stats.csv")
+
 
 
 if __name__ == "__main__":
