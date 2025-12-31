@@ -1,6 +1,6 @@
 # Kayn Stats Analyzer
 
-A Python tool that fetches and analyzes your League of Legends ranked statistics specifically for the Kayn champion, comparing performance between Blue Kayn (Precision primary rune) and Red Kayn (Domination primary rune).
+A Python tool that fetches and analyzes your League of Legends ranked statistics specifically for the Kayn champion, comparing performance between Red Kayn (Precision primary rune) and Blue Kayn (Domination or Inspiration primary rune).
 
 ## Features
 
